@@ -83,7 +83,7 @@ def unlock(mutex, duration):
 def run_command(cmd, *args, env=None, mutex=None):
     if not mutex is None:
         mutex.acquire()
-        t = Thread(target=unlock, args=[mutex, 0.01])
+        t = Thread(target=unlock, args=[mutex, 0.1])
         t.daemon = True
         t.start()
 
