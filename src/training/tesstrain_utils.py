@@ -574,6 +574,8 @@ def phase_E_extract_features(ctx, box_config, ext):
             future = executor.submit(
                 run_command,
                 "tesseract",
+                "-l",
+                ctx.lang_code,
                 img_file,
                 pathlib.Path(img_file).with_suffix(""),
                 *box_config,
