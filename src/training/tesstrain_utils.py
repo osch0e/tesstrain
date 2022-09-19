@@ -115,7 +115,7 @@ def run_command(cmd, *args, env=None, mutex=None):
                 proclog.error(proc.stdout.decode("utf-8", errors="replace"))
             except Exception as e:
                 proclog.error(e)
-        err_exit(f"Program {cmd} failed with return code {proc.returncode}. Abort.")
+            err_exit(f"Program {cmd} failed with return code {proc.returncode}. Abort.")
 
 
 # Check if all the given files exist, or exit otherwise.
