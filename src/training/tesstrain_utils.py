@@ -27,10 +27,12 @@ import sys
 from datetime import date
 from operator import itemgetter
 from tempfile import TemporaryDirectory, mkdtemp
+from threading import Thread, Lock
 
 from tqdm import tqdm
 
 from language_specific import VERTICAL_FONTS
+import time
 
 log = logging.getLogger(__name__)
 
@@ -71,11 +73,20 @@ def err_exit(msg):
     log.critical(msg)
     sys.exit(1)
 
+def unlock(mutex, duration):
+    time.sleep(duration)
+    mutex.release()
 
 # Helper function to run a command and append its output to a log. Aborts early
 # if the program file is not found.
 # Usage: run_command CMD ARG1 ARG2...
-def run_command(cmd, *args, env=None):
+def run_command(cmd, *args, env=None, mutex=None):
+    if not mutex is None:
+        mutex.acquire()
+        t = Thread(target=unlock, args=[mutex, 0.01])
+        t.daemon = True
+        t.start()
+
     for d in ("", "api/", "training/"):
         testcmd = shutil.which(f"{d}{cmd}")
         if shutil.which(testcmd):
@@ -93,17 +104,17 @@ def run_command(cmd, *args, env=None):
         if isinstance(arg, pathlib.WindowsPath):
             args[idx] = str(arg)
 
-    proc = subprocess.run(
-        [cmd, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env
-    )
-    proclog = logging.getLogger(cmd)
-    if proc.returncode == 0:
-        proclog.debug(proc.stdout.decode("utf-8", errors="replace"))
-    else:
-        try:
-            proclog.error(proc.stdout.decode("utf-8", errors="replace"))
-        except Exception as e:
-            proclog.error(e)
+        proc = subprocess.run(
+            [cmd, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env
+        )
+        proclog = logging.getLogger(cmd)
+        if proc.returncode == 0:
+            proclog.debug(proc.stdout.decode("utf-8", errors="replace"))
+        else:
+            try:
+                proclog.error(proc.stdout.decode("utf-8", errors="replace"))
+            except Exception as e:
+                proclog.error(e)
         err_exit(f"Program {cmd} failed with return code {proc.returncode}. Abort.")
 
 
@@ -325,7 +336,7 @@ def make_outbase(ctx, fontname, exposure):
 
 # Helper function for phaseI_generate_image. Generates the image for a single
 # language/font combination in a way that can be run in parallel.
-def generate_font_image(ctx, font, exposure, char_spacing):
+def generate_font_image(ctx, font, exposure, char_spacing, mutex):
     log.info(f"Rendering using {font}")
     fontname = make_fontname(font)
     outbase = make_outbase(ctx, fontname, exposure)
@@ -356,6 +367,7 @@ def generate_font_image(ctx, font, exposure, char_spacing):
         f"--text={ctx.training_text}",
         f"--ptsize={ctx.ptsize}",
         *ctx.text2image_extra_args,
+        mutex=mutex,
     )
 
     check_file_readable(str(outbase) + ".box", str(outbase) + ".tif")
@@ -370,6 +382,7 @@ def generate_font_image(ctx, font, exposure, char_spacing):
             f"--text={ctx.train_ngrams_file}",
             f"--only_extract_font_properties",
             f"--ptsize=32",
+            mutex=mutex,
         )
         check_file_readable(str(outbase) + ".fontinfo")
     return f"{font}-{exposure}"
@@ -404,11 +417,12 @@ def phase_I_generate_image(ctx, par_factor=None):
 
             check_file_readable(ctx.train_ngrams_file)
 
+        mutex = Lock()
         with tqdm(
                 total=len(ctx.fonts)
         ) as pbar, concurrent.futures.ThreadPoolExecutor(max_workers=par_factor) as executor:
             futures = [
-                executor.submit(generate_font_image, ctx, font, exposure, char_spacing)
+                executor.submit(generate_font_image, ctx, font, exposure, char_spacing, mutex)
                 for font in ctx.fonts
             ]
             for future in concurrent.futures.as_completed(futures):
@@ -550,6 +564,8 @@ def phase_E_extract_features(ctx, box_config, ext):
 
     log.info(f"Using TESSDATA_PREFIX={tessdata_environ['TESSDATA_PREFIX']}")
 
+    mutex = Lock()
+
     with tqdm(total=len(img_files)) as pbar, concurrent.futures.ThreadPoolExecutor(
             max_workers=2
     ) as executor:
@@ -563,6 +579,7 @@ def phase_E_extract_features(ctx, box_config, ext):
                 *box_config,
                 config,
                 env=tessdata_environ,
+                mutex=mutex,
             )
             futures.append(future)
 
